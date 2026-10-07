@@ -3741,6 +3741,118 @@ document.addEventListener('click', e => {
   route = next; save();
   rerenderKeep();
 });
+
+// v7 calibration continuity fix
+function applyCalibrationContinuityFix(){
+  const envLine='export HF_LEROBOT_CALIBRATION="$HOME/FollowMe/{{WORKSHOP}}/calibration"\n';
+
+  Object.keys(ALLSTEPS).forEach(r=>{
+    const arr=ALLSTEPS[r];
+
+    arr.forEach(step=>{
+      if(!step.cmds) return;
+      step.cmds=step.cmds.map(c=>String(c).split(envLine).join(''));
+    });
+
+    const cal=arr.find(x=>x.key==='A7');
+    if(cal){
+      cal.cmds=[String.raw`source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate lerobot
+unset HF_LEROBOT_CALIBRATION
+lerobot-calibrate --teleop.type=so101_leader --teleop.port={{LPORT}} --teleop.id={{LEADER}}
+STATUS=$?
+if [ "$STATUS" -eq 0 ]; then
+  SRC="$HOME/.cache/huggingface/lerobot/calibration/teleoperators/so_leader/{{LEADER}}.json"
+  DST="$HOME/FollowMe/{{WORKSHOP}}/calibration/teleoperators/so_leader/{{LEADER}}.json"
+  mkdir -p "$(dirname "$DST")"
+  if [ -f "$SRC" ]; then cp "$SRC" "$DST" && printf '\nLEADER CALIBRATION SAVED\n'; fi
+fi`,String.raw`source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate lerobot
+unset HF_LEROBOT_CALIBRATION
+lerobot-calibrate --robot.type=so101_follower --robot.port={{FPORT}} --robot.id={{FOLLOWER}}
+STATUS=$?
+if [ "$STATUS" -eq 0 ]; then
+  SRC="$HOME/.cache/huggingface/lerobot/calibration/robots/so_follower/{{FOLLOWER}}.json"
+  DST="$HOME/FollowMe/{{WORKSHOP}}/calibration/robots/so_follower/{{FOLLOWER}}.json"
+  mkdir -p "$(dirname "$DST")"
+  if [ -f "$SRC" ]; then cp "$SRC" "$DST" && printf '\nFOLLOWER CALIBRATION SAVED\n'; fi
+fi`];
+      cal.looks=['Calibration saved to, then LEADER CALIBRATION SAVED','Calibration saved to, then FOLLOWER CALIBRATION SAVED'];
+    }
+
+    const check=arr.find(x=>x.title==='Check setup');
+    if(check && check.cmds){
+      check.cmds=check.cmds.map((c,i)=>{
+        let x=String(c).split(envLine).join('');
+        if(i===check.cmds.length-1 || x.includes('READY TO CONTINUE') || x.includes('READY TO TEST')){
+          x=x.replace(
+            'CAL=$(find "$HF_LEROBOT_CALIBRATION" -type f -name "{{FOLLOWER}}.json" -print -quit 2>/dev/null)',
+`CAL="$HOME/.cache/huggingface/lerobot/calibration/robots/so_follower/{{FOLLOWER}}.json"
+if [ ! -f "$CAL" ]; then
+  BACK=$(find "$HOME/FollowMe/{{WORKSHOP}}/calibration" -type f \( -name "{{FOLLOWER}}.json" -o -name "follower.json" \) -print -quit 2>/dev/null)
+  if [ -n "$BACK" ]; then
+    mkdir -p "$(dirname "$CAL")"
+    cp "$BACK" "$CAL" && printf 'RESTORED  calibration\n'
+  fi
+fi`);
+          x=x.replace('[ -n "$CAL" ]','[ -f "$CAL" ]');
+        }
+        return x;
+      });
+    }
+
+    const ready=arr.find(x=>x.key==='A25');
+    if(ready){
+      ready.what='Switch the follower arm on and check its USB cable is in.\nPress Copy, paste into Terminal, press Enter.';
+      ready.cmds=[String.raw`source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate lerobot
+unset HF_LEROBOT_CALIBRATION
+CAL="$HOME/.cache/huggingface/lerobot/calibration/robots/so_follower/{{FOLLOWER}}.json"
+if [ ! -f "$CAL" ]; then
+  BACK=$(find "$HOME/FollowMe/{{WORKSHOP}}/calibration" -type f \( -name "{{FOLLOWER}}.json" -o -name "follower.json" \) -print -quit 2>/dev/null)
+  if [ -n "$BACK" ]; then
+    mkdir -p "$(dirname "$CAL")"
+    cp "$BACK" "$CAL"
+  fi
+fi
+if [ ! -f "$CAL" ]; then
+  printf '\nSTOP. Saved follower calibration was not found.\n\n'
+else
+  CAL_FILE="$CAL" PORT="{{FPORT}}" ROBOT_ID="{{FOLLOWER}}" python - <<'PY'
+import builtins, os
+from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
+
+cal=os.environ["CAL_FILE"]
+port=os.environ["PORT"]
+rid=os.environ["ROBOT_ID"]
+if not os.path.isfile(cal):
+    raise SystemExit("STOP. Saved follower calibration was not found.")
+
+builtins.input=lambda prompt="": (print(prompt, end="", flush=True), "")[1]
+robot=SO101Follower(SO101FollowerConfig(port=port,id=rid,use_degrees=True))
+try:
+    robot.connect()
+    print("\nFOLLOWER READY")
+finally:
+    try:
+        robot.disconnect()
+    except Exception:
+        pass
+PY
+fi`];
+      ready.looks=['FOLLOWER READY'];
+      ready.after='';
+      ready.intro='';
+      ready.stuck=[
+        {t:'It says Saved follower calibration was not found: do Calibrate both arms again.',c:'',go:'A7'},
+        {t:'It says Failed to write, Torque_Enable, Lock, or no status packet: switch the follower off, wait five seconds, push its power plug and motor cables in firmly, switch it on, then do this step again.',c:''},
+        {t:'It says the port is missing: do Find both arms’ USB ports again.',c:'',go:'A5'}
+      ];
+    }
+  });
+}
+applyCalibrationContinuityFix();
+
 render();
 window.scrollTo({top:0, behavior:'instant'});
 </script>
